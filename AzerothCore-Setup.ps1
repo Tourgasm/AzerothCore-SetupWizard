@@ -34,6 +34,7 @@ $ClientDataApi  = 'https://api.github.com/repos/wowgaming/client-data/releases/l
 $ClientDataZip  = 'https://github.com/wowgaming/client-data/releases/download/v20.0/Data.zip'
 $BoostUrl       = 'https://sourceforge.net/projects/boost/files/boost-binaries/1.78.0/boost_1_78_0-msvc-14.3-64.exe/download'
 $BoostDir       = 'C:\local\boost_1_78_0'
+$OpenSslHashesUrl = 'https://github.com/slproweb/opensslhashes/raw/master/win32_openssl_hashes.json'
 $LogFile        = Join-Path $PSScriptRoot 'setup-log.txt'
 $SettingsFile   = Join-Path $PSScriptRoot 'wizard-settings.json'
 
@@ -236,11 +237,98 @@ function Install-ToolIfMissing([string]$Name, [scriptblock]$Detect, [string[]]$W
     throw "$Name could not be installed automatically. Install it manually, then re-run the wizard."
 }
 
+$OpenSslRoots = @((Join-Path $env:ProgramFiles 'OpenSSL-Win64'), 'C:\OpenSSL-Win64')
+
+# Major version from the installed headers (include\openssl\opensslv.h), or $null.
+function Get-OpenSslMajor([string]$Root) {
+    $header = Join-Path $Root 'include\openssl\opensslv.h'
+    if (-not (Test-Path $header)) { return $null }
+    $m = Select-String -Path $header -Pattern 'define\s+OPENSSL_VERSION_MAJOR\s+(\d+)' | Select-Object -First 1
+    if ($m) { return [int]$m.Matches[0].Groups[1].Value }
+    return $null
+}
+
+# Finds a full (with headers) OpenSSL 3.x install. The wiki requires 3.x;
+# OpenSSL 4 renamed its DLLs and is not supported.
 function Find-OpenSsl {
-    foreach ($root in @((Join-Path $env:ProgramFiles 'OpenSSL-Win64'), 'C:\OpenSSL-Win64')) {
-        if (Test-Path (Join-Path $root 'include\openssl\ssl.h')) { return $root }
+    foreach ($root in $OpenSslRoots) {
+        if ((Test-Path (Join-Path $root 'include\openssl\ssl.h')) -and (Get-OpenSslMajor $root) -eq 3) { return $root }
     }
     return $null
+}
+
+function Install-OpenSsl3 {
+    $found = Find-OpenSsl
+    if ($found) { Write-Ok "OpenSSL 3 found at $found"; return $found }
+
+    foreach ($root in $OpenSslRoots) {
+        $major = Get-OpenSslMajor $root
+        if ($major -and $major -ne 3) {
+            Write-Warn "OpenSSL $major is installed at $root, but AzerothCore needs OpenSSL 3.x."
+            if (-not (Read-YesNo "Uninstall OpenSSL $major and install OpenSSL 3 instead?")) {
+                Stop-Wizard 'OpenSSL 3.x is required. Uninstall the other version and run Step 1 again.'
+            }
+            & winget uninstall --id ShiningLight.OpenSSL.Dev -e --silent --accept-source-agreements | Out-Host
+            if (Get-OpenSslMajor $root) {
+                Write-Warn "It is still there. Uninstall 'OpenSSL' from Settings > Apps, then press Enter."
+                Read-Host | Out-Null
+            }
+        }
+    }
+
+    # slproweb deletes old installers when a new one comes out, so winget's links
+    # for older versions go dead. Their hash list always points at live files.
+    if (-not (Install-OpenSsl3FromSlproweb)) { Install-OpenSsl3FromWinget }
+    # Stop "winget upgrade --all" from moving it to OpenSSL 4 later.
+    & winget pin add --id ShiningLight.OpenSSL.Dev --version '3.*' --accept-source-agreements | Out-Null
+
+    $found = Find-OpenSsl
+    if (-not $found) {
+        Start-Process 'https://slproweb.com/products/Win32OpenSSL.html'
+        Stop-Wizard 'OpenSSL 3 could not be installed automatically. Install the newest "Win64 OpenSSL v3.x" (not Light) from the page that just opened, then run Step 1 again.'
+    }
+    Write-Ok "OpenSSL 3 installed at $found"
+    return $found
+}
+
+# Newest full (not Light) Win64 OpenSSL 3.x MSI from slproweb's published list, checksum-verified.
+function Install-OpenSsl3FromSlproweb {
+    try {
+        $list = Invoke-RestMethod -Uri $OpenSslHashesUrl -UseBasicParsing
+    } catch {
+        Write-Warn "Could not read the OpenSSL installer list: $($_.Exception.Message)"
+        return $false
+    }
+    $pick = $list.files.PSObject.Properties | ForEach-Object { $_.Value } |
+            Where-Object { $_.bits -eq 64 -and $_.arch -eq 'INTEL' -and -not $_.light -and
+                           $_.installer -eq 'msi' -and $_.basever -like '3.*' } |
+            Sort-Object { [version]$_.basever } -Descending | Select-Object -First 1
+    if (-not $pick) { Write-Warn 'No OpenSSL 3.x installer in the list.'; return $false }
+
+    $msi = Join-Path $env:TEMP (Split-Path $pick.url -Leaf)
+    Write-Step "Downloading OpenSSL $($pick.basever) ($([math]::Round($pick.size / 1MB)) MB)..."
+    Save-Download $pick.url $msi
+    if ((Get-FileHash $msi -Algorithm SHA256).Hash -ne $pick.sha256.ToUpper()) {
+        Remove-Item $msi -Force
+        Write-Warn 'Checksum mismatch on the OpenSSL download; discarded it.'
+        return $false
+    }
+    Write-Step "Installing OpenSSL $($pick.basever)..."
+    $proc = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart')
+    Remove-Item $msi -Force -ErrorAction SilentlyContinue
+    if ($proc.ExitCode -notin 0, 3010) { Write-Warn "OpenSSL installer exited with code $($proc.ExitCode)"; return $false }
+    return [bool](Find-OpenSsl)
+}
+
+# Fallback: try winget's 3.x versions newest first until one still downloads.
+function Install-OpenSsl3FromWinget {
+    $versions = (& winget show --id ShiningLight.OpenSSL.Dev -e --versions --accept-source-agreements) | Out-String
+    $v3s = [regex]::Matches($versions, '(?m)^\s*(3\.\d+\.\d+)\s*$') |
+           ForEach-Object { [version]$_.Groups[1].Value } | Sort-Object -Descending
+    foreach ($v in $v3s) {
+        if ((Invoke-Winget -Id 'ShiningLight.OpenSSL.Dev' -Version $v.ToString()) -and (Find-OpenSsl)) { return }
+        Write-Warn "OpenSSL $v failed, trying an older 3.x version..."
+    }
 }
 
 function Resolve-BuildTools {
@@ -248,7 +336,7 @@ function Resolve-BuildTools {
     if (-not $script:CMake) { $script:CMake = Find-Tool 'cmake' @("$env:ProgramFiles\CMake\bin\cmake.exe") }
     if (-not $script:OpenSslRoot) { $script:OpenSslRoot = Find-OpenSsl }
     if (-not ($script:Git -and $script:CMake -and $script:OpenSslRoot)) {
-        throw 'Git, CMake or OpenSSL is missing. Run Step 1 (Requirements) first.'
+        throw 'Git, CMake or OpenSSL 3 is missing. Run Step 1 (Requirements) first.'
     }
 }
 
@@ -781,6 +869,8 @@ function Invoke-CMakeConfigure($Paths, $Generator, $BoostRoot, $MySql, [bool]$Bu
         '-G', $Generator, '-A', 'x64',
         "-DBOOST_ROOT=$BoostRoot",
         "-DOPENSSL_ROOT_DIR=$(ConvertTo-CMakePath $script:OpenSslRoot)",
+        # Forget previously found OpenSSL libraries so a changed install is picked up.
+        '-U', 'OPENSSL_*', '-U', 'LIB_EAY*', '-U', 'SSL_EAY*',
         "-DMYSQL_INCLUDE_DIR=$(ConvertTo-CMakePath (Join-Path $MySql.Root 'include'))",
         "-DMYSQL_LIBRARY=$(ConvertTo-CMakePath (Join-Path $MySql.Root 'lib\libmysql.lib'))",
         "-DTOOLS_BUILD=$tools"
@@ -974,19 +1064,19 @@ function Step-Requirements {
         & winget upgrade --id Kitware.CMake -e --silent --accept-package-agreements --accept-source-agreements | Out-Host
     }
 
-    # The full Win64 OpenSSL 3.x package (not "Light"), which includes the headers.
-    $script:OpenSslRoot = Install-ToolIfMissing 'OpenSSL 3 (Win64, full)' { Find-OpenSsl } @('ShiningLight.OpenSSL.Dev', 'ShiningLight.OpenSSL')
-
-    # The wiki's fix for "missing Microsoft Visual C++" errors from OpenSSL.
+    # The wiki's fix for "missing Microsoft Visual C++" errors; OpenSSL's installer needs it first.
     $vc = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64' -ErrorAction SilentlyContinue
     if ($vc -and $vc.Installed -eq 1) { Write-Ok 'Visual C++ Redistributable (x64) found' }
     else { Invoke-Winget -Id 'Microsoft.VCRedist.2015+.x64' | Out-Null }
+
+    # The full Win64 OpenSSL 3.x package (not "Light"), which includes the headers.
+    $script:OpenSslRoot = Install-OpenSsl3
 
     Initialize-VisualStudio | Out-Null
 
     if (Test-Path "$env:ProgramFiles\HeidiSQL\heidisql.exe") { Write-Ok 'HeidiSQL found' }
     elseif (Read-YesNo 'Install HeidiSQL (a program for browsing/editing the database)?') {
-        Invoke-Winget -Id 'AnsgarBecker.HeidiSQL' | Out-Null
+        Invoke-Winget -Id 'HeidiSQL.HeidiSQL' | Out-Null
     }
 
     Write-Host ''
