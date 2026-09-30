@@ -32,6 +32,8 @@ $MinCMake       = [version]'3.16.0'
 $BuildConfig    = 'RelWithDebInfo'
 $ClientDataApi  = 'https://api.github.com/repos/wowgaming/client-data/releases/latest'
 $ClientDataZip  = 'https://github.com/wowgaming/client-data/releases/download/v20.0/Data.zip'
+$BoostUrl       = 'https://sourceforge.net/projects/boost/files/boost-binaries/1.78.0/boost_1_78_0-msvc-14.3-64.exe/download'
+$BoostDir       = 'C:\local\boost_1_78_0'
 $LogFile        = Join-Path $PSScriptRoot 'setup-log.txt'
 $SettingsFile   = Join-Path $PSScriptRoot 'wizard-settings.json'
 
@@ -198,6 +200,21 @@ function Invoke-Winget {
     Update-SessionPath
     if ($code -ne 0) { Write-Warn "winget exited with code $code for $Id" }
     return ($code -eq 0)
+}
+
+# Downloads with curl.exe (ships with Windows 10+): shows progress, resumes a
+# partial file, and skips the download if the file is already complete.
+function Save-Download([string]$Url, [string]$OutFile) {
+    if (Test-Path $OutFile) {
+        $head = (& curl.exe -sIL $Url) | Out-String
+        $sizes = [regex]::Matches($head, '(?im)^content-length:\s*(\d+)')
+        if ($sizes.Count -gt 0 -and [int64]$sizes[$sizes.Count - 1].Groups[1].Value -eq (Get-Item $OutFile).Length) {
+            Write-Ok "$(Split-Path $OutFile -Leaf) already downloaded"
+            return
+        }
+    }
+    & curl.exe -L --fail -C - -o $OutFile $Url
+    if ($LASTEXITCODE -ne 0) { throw "Download failed: $Url (run the step again to resume)" }
 }
 
 function Find-Tool([string]$Command, [string[]]$Fallbacks) {
@@ -621,6 +638,24 @@ function Set-BoostRoot([string]$Path, [version]$Version) {
     return $normalized
 }
 
+# Downloads the prebuilt Boost 1.78 (MSVC 14.3, 64-bit) and runs its Inno Setup
+# installer silently. Returns the installed version, or $null on failure.
+function Install-Boost {
+    $exe = Join-Path $env:TEMP 'boost_1_78_0-msvc-14.3-64.exe'
+    Write-Step 'Downloading Boost 1.78...'
+    Save-Download $BoostUrl $exe
+    Write-Step "Installing Boost into $BoostDir (unpacking takes a few minutes)..."
+    $proc = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList @(
+        '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$BoostDir`"")
+    if ($proc.ExitCode -ne 0) { Write-Fail "Boost installer exited with code $($proc.ExitCode)"; return $null }
+    $v = Get-BoostVersion $BoostDir
+    if ($v) {
+        Remove-Item $exe -Force -ErrorAction SilentlyContinue
+        Write-Ok "Boost $v installed"
+    }
+    return $v
+}
+
 function Initialize-Boost {
     $candidates = @($env:BOOST_ROOT, [Environment]::GetEnvironmentVariable('BOOST_ROOT', 'Machine'))
     $candidates += @(Get-ChildItem 'C:\local' -Directory -Filter 'boost_*' -ErrorAction SilentlyContinue |
@@ -635,12 +670,22 @@ function Initialize-Boost {
     }
 
     Write-Host ''
-    Write-Host 'Boost was not found. To install it:'
-    Write-Host '  1. Open the Boost prebuilt binaries page (sourceforge.net/projects/boost/files/boost-binaries/)'
-    Write-Host "  2. Open the newest version folder ($MinBoost or newer) and download  boost_1_XX_0-msvc-14.3-64.exe"
-    Write-Host '  3. Run it and keep the default location (C:\local\boost_1_XX_0)'
-    if (Read-YesNo 'Open the download page in your browser now?') {
-        Start-Process 'https://sourceforge.net/projects/boost/files/boost-binaries/'
+    Write-Host 'Boost was not found.'
+    $c = Read-Choice 'How do you want to install it?' @(
+        "Download and install Boost 1.78 for Visual Studio 2022 automatically (~180 MB, into $BoostDir)",
+        'I will download and install it myself')
+    if ($c -eq 0) {
+        $v = Install-Boost
+        if ($v) { return Set-BoostRoot $BoostDir $v }
+        Write-Warn 'Automatic install did not work. Falling back to installing it yourself.'
+    }
+
+    Write-Host ''
+    Write-Host 'To install Boost yourself:'
+    Write-Host '  1. Download boost_1_78_0-msvc-14.3-64.exe (the link opens in your browser)'
+    Write-Host "  2. Run it and keep the default location ($BoostDir)"
+    if (Read-YesNo 'Open the download link in your browser now?') {
+        Start-Process $BoostUrl
     }
 
     while ($true) {
@@ -796,9 +841,7 @@ function Install-ClientDataDownload($Paths) {
     $url = Get-ClientDataZipUrl
     $zip = Join-Path $Paths.Bin 'Data.zip'
     Write-Step "Downloading $url (about 1.2 GB)..."
-    # curl.exe ships with Windows 10+; it shows progress and can resume (-C -).
-    & curl.exe -L --fail -C - -o $zip $url
-    if ($LASTEXITCODE -ne 0) { throw 'Client data download failed. Run Step 3 again to resume the download.' }
+    Save-Download $url $zip
 
     New-Item -ItemType Directory -Force -Path $Paths.Data | Out-Null
     Write-Step "Extracting into $($Paths.Data)..."
