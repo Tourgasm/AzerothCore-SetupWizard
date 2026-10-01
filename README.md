@@ -45,7 +45,7 @@ The wizard handles the installs, downloads, build, database and networking. It f
 
 - Windows 10 or 11 (64-bit)
 - Administrator rights
-- [winget](https://learn.microsoft.com/windows/package-manager/winget/) (App Installer). It comes with Windows 11 and recent Windows 10.
+- [winget](https://learn.microsoft.com/windows/package-manager/winget/) (App Installer). It comes with Windows 11 and recent Windows 10. If it's missing (for example in Windows Sandbox), the wizard offers to install it.
 - About **60 GB** free disk space (Visual Studio, Boost, source, build and client data)
 - A WoW **3.3.5a (12340)** client to play with. TrinityCore also needs it to extract the client data.
 - Time: the first full run takes **1-2 hours**, mostly the Visual Studio install and compiling. Extracting client data (always needed for TrinityCore) can add several hours.

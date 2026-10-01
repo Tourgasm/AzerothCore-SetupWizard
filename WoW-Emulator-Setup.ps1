@@ -284,6 +284,38 @@ function Invoke-Winget {
     return ($code -eq 0)
 }
 
+function Test-Winget {
+    if (Get-Command winget -ErrorAction SilentlyContinue) { return $true }
+    # winget.exe is an app alias here; a fresh install is not on this session's PATH yet.
+    $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+    if (Test-Path (Join-Path $apps 'winget.exe')) { $env:Path += ";$apps"; return $true }
+    return $false
+}
+
+# winget is missing on Windows Sandbox, LTSC/Server editions and some older Windows 10
+# installs. Microsoft's documented fix is the Microsoft.WinGet.Client PowerShell module.
+function Install-WingetIfMissing {
+    if (Test-Winget) { Write-Ok 'winget available'; return }
+    Write-Warn 'winget (the Windows package manager) was not found. The wizard uses it to install the other tools.'
+    if (Read-YesNo 'Install winget now?') {
+        try {
+            Write-Step 'Installing winget (this can take a few minutes)...'
+            $ProgressPreference = 'SilentlyContinue'
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
+            Import-Module Microsoft.WinGet.Client
+            Repair-WinGetPackageManager -AllUsers | Out-Null
+            Update-SessionPath
+        } catch {
+            Write-Fail "Automatic winget install failed: $($_.Exception.Message)"
+        }
+    }
+    if (Test-Winget) { Write-Ok 'winget installed'; return }
+    Write-Fail 'winget is still missing. Install "App Installer" from the Microsoft Store (or from github.com/microsoft/winget-cli/releases), then re-run.'
+    Start-Process 'ms-windows-store://pdp/?productid=9NBLGGH4NNS1' -ErrorAction SilentlyContinue
+    Stop-Wizard 'winget is required.'
+}
+
 # Downloads with curl.exe (ships with Windows 10+): shows progress, skips the download
 # if the file is already complete, and when a server drops the connection it resumes
 # where it stopped. Several URLs can be given (mirrors of the same file); each is tried
@@ -1277,12 +1309,7 @@ function Wait-ForRealmlist($Account, [int]$TimeoutSeconds = 180) {
 # ===========================================================================
 function Step-Requirements {
     Write-Header 'Step 1/6: Requirements'
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Write-Fail 'winget was not found. Install "App Installer" from the Microsoft Store, then re-run.'
-        Start-Process 'ms-windows-store://pdp/?productid=9NBLGGH4NNS1'
-        Stop-Wizard 'winget is required.'
-    }
-    Write-Ok 'winget available'
+    Install-WingetIfMissing
 
     # Git's default installer option is the wiki's "Git from the command line and also from 3rd-party software".
     $script:Git = Install-ToolIfMissing 'Git' {

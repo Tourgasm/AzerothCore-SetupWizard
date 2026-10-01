@@ -1,0 +1,9 @@
+# Created per machine by the wizard
+wizard-settings*.json
+setup-log.txt
+
+# Local test config (contains a path on this PC)
+*.wsb
+
+# Original batch script, replaced by the wizard
+azerothcore_setup.bat
