@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.1 - 2026-10-01 (pre-release)
+
+- Installs winget itself if it's missing (Windows Sandbox, older Windows 10), instead of stopping.
+
 ## 0.9.0 - 2026-10-01 (pre-release)
 
 First public pre-release.
@@ -8,7 +12,6 @@ First public pre-release.
 - Choice of **AzerothCore** (stock or Playerbots fork, plus optional modules) or **TrinityCore** 3.3.5.
 - Six steps following each project's official Windows install guides: requirements, core installation, server setup, database setup, networking, and a separate `server` folder.
 - Run the full setup or any single step from a menu. Every step can be re-run safely.
-- Installs winget itself if it's missing (Windows Sandbox, older Windows 10).
 - Uses an existing WAMP MySQL 8.x, or installs MySQL 8.4 LTS.
 - Creates a MySQL account with your own username and password.
 - Installs OpenSSL 3.x (not 4) from slproweb's current installer list, verified by checksum.

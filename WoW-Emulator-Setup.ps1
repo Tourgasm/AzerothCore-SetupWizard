@@ -40,7 +40,7 @@ $ErrorActionPreference = 'Stop'
 # Shared settings
 # ---------------------------------------------------------------------------
 $WizardName       = 'WoW Emulator Setup'
-$WizardVersion    = '0.9.0'
+$WizardVersion    = '0.9.1'
 $BuildConfig      = 'RelWithDebInfo'
 $OpenSslHashesUrl = 'https://github.com/slproweb/opensslhashes/raw/master/win32_openssl_hashes.json'
 $LogFile          = Join-Path $PSScriptRoot 'setup-log.txt'
