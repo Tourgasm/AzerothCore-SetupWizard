@@ -1,6 +1,6 @@
 # WoW Emulator Setup
 
-**Version 0.9.1 (pre-release)** · [Changelog](CHANGELOG.md) · [MIT License](LICENSE)
+**Version 0.9.2 (pre-release)** · [Changelog](CHANGELOG.md) · [MIT License](LICENSE)
 
 An interactive wizard that sets up your own World of Warcraft 3.3.5a (Wrath of the Lich King) private server on Windows. You choose between:
 
@@ -21,7 +21,7 @@ The wizard handles the installs, downloads, build, database and networking. It f
 > This is a community tool and is not affiliated with the AzerothCore or TrinityCore projects.
 > If something doesn't work, open an issue here instead of asking their teams.
 
-> **Pre-release:** AzerothCore with WAMP has been tested end to end. TrinityCore and setups without WAMP follow the official guides but haven't been fully tested yet. If you try them, please report how it went (and attach `setup-log.txt`).
+> **Pre-release:** AzerothCore and TrinityCore have both been tested end to end on a PC with WAMP. Setups without WAMP (where the wizard installs MySQL itself) follow the official guides but haven't been fully tested yet. If you try that, please report how it went (and attach `setup-log.txt`).
 
 ## Features
 

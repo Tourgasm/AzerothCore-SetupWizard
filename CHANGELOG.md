@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.2 - 2026-10-01 (pre-release)
+
+- TrinityCore has now been tested end to end (with WAMP MySQL 8.4 and Boost 1.84): compile, client data extraction, TDB import, first start and the server folder.
+- Fixed: the wizard offered to install HeidiSQL on every run even when it was already installed.
+
 ## 0.9.1 - 2026-10-01 (pre-release)
 
 - Installs winget itself if it's missing (Windows Sandbox, older Windows 10), instead of stopping.
@@ -24,7 +29,7 @@ First public pre-release.
 - Writes a log to `setup-log.txt`, including the wizard version.
 
 ### Known limitations
-- Tested end to end with AzerothCore + WAMP only. TrinityCore and standalone MySQL setups have not yet been tested end to end.
+- Tested end to end with AzerothCore + WAMP only (TrinityCore followed in 0.9.2). Setups without WAMP (standalone MySQL) have not yet been tested end to end.
 - MariaDB is not supported.
 - Router port forwarding has to be set up by hand.
 - AzerothCore and TrinityCore can be installed side by side, but only one can run at a time (they use the same ports).

@@ -40,7 +40,7 @@ $ErrorActionPreference = 'Stop'
 # Shared settings
 # ---------------------------------------------------------------------------
 $WizardName       = 'WoW Emulator Setup'
-$WizardVersion    = '0.9.1'
+$WizardVersion    = '0.9.2'
 $BuildConfig      = 'RelWithDebInfo'
 $OpenSslHashesUrl = 'https://github.com/slproweb/opensslhashes/raw/master/win32_openssl_hashes.json'
 $LogFile          = Join-Path $PSScriptRoot 'setup-log.txt'
@@ -1334,7 +1334,10 @@ function Step-Requirements {
 
     Initialize-VisualStudio | Out-Null
 
-    if (Test-Path "$env:ProgramFiles\HeidiSQL\heidisql.exe") { Write-Ok 'HeidiSQL found' }
+    # winget installs HeidiSQL per user (AppData\Local\Programs); older installers used Program Files.
+    $heidi = @("$env:LOCALAPPDATA\Programs\HeidiSQL\heidisql.exe", "$env:ProgramFiles\HeidiSQL\heidisql.exe") |
+             Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($heidi) { Write-Ok 'HeidiSQL found' }
     elseif (Read-YesNo 'Install HeidiSQL (a program for browsing/editing the database)?') {
         Invoke-Winget -Id 'HeidiSQL.HeidiSQL' | Out-Null
     }
