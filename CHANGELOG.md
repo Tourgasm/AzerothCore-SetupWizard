@@ -2,9 +2,10 @@
 
 ## 0.9.3 - 2026-10-01 (pre-release)
 
-Found by a test run on a clean PC (Windows Sandbox, no WAMP):
+Found by test runs on clean PCs without WAMP (Windows Sandbox and a Hyper-V virtual machine):
 
-- Confirmed working on a clean PC: all of Step 1 (winget auto-install, Git, CMake, Visual C++ runtime, OpenSSL 3, HeidiSQL, MySQL from the ZIP archive, Boost).
+- Confirmed working: all six steps with AzerothCore on a freshly installed Windows 11 (Hyper-V VM, 16 GB), using MySQL's installer and MySQL Configurator.
+- Confirmed working in Windows Sandbox: all of Step 1, including installing winget and installing MySQL from the ZIP archive.
 - Fixed: an interrupted Visual Studio install was accepted as working. The wizard now checks that the Windows SDK (headers, libraries and tools) is present and offers to let the Visual Studio Installer finish where it stopped.
 - Fixed: MySQL could not be installed on Windows without VBScript (Windows Sandbox, and future Windows versions as VBScript is removed). MySQL's installer needs VBScript and failed with error 2738. The wizard now installs MySQL from the official ZIP archive in that case, or whenever the installer fails: it unpacks MySQL, creates the databases, registers the `MySQL84` Windows service and asks you for a root password. No MySQL Configurator step is needed on that path.
 - Fixed: on PCs with little memory for their processor count (for example 8 GB with 6 cores), the compile failed with "C1060: compiler is out of heap space". The wizard now limits how many compiler processes run at once on such PCs and says so. PCs with 2.5 GB or more per logical processor compile at full speed as before.
