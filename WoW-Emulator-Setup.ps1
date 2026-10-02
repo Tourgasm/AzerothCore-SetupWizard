@@ -1005,7 +1005,27 @@ function Get-StandaloneMySql {
             Write-Host '      - if WAMP is also installed, use port 3307 so the two do not clash'
             if (Read-YesNo 'Open MySQL Configurator now?') {
                 Start-Process -FilePath $configurator -Wait
-                $mysql.Port = Get-MySqlPort $mysql.IniPath
+                # Confirm it was actually completed, rather than finding out in Step 4.
+                while ($true) {
+                    $running = @(Get-Service -ErrorAction SilentlyContinue |
+                                 Where-Object { $_.Name -like 'MySQL*' -and $_.Status -eq 'Running' })
+                    if ($running.Count) {
+                        $mysql.Port = Get-MySqlPort $mysql.IniPath
+                        Update-MySqlPort $mysql
+                        Write-Ok "MySQL service '$($running[0].Name)' is running on port $($mysql.Port)"
+                        break
+                    }
+                    if (Get-Process -Name 'mysql_configurator' -ErrorAction SilentlyContinue) {
+                        Read-Host 'MySQL Configurator is still open. Finish it (Execute, then Finish), then press Enter here' | Out-Null
+                        continue
+                    }
+                    Write-Warn 'MySQL has no running Windows service yet, so the Configurator was not completed.'
+                    if (-not (Read-YesNo 'Open MySQL Configurator again?')) {
+                        Write-Warn 'Run "MySQL Configurator" from the Start menu before Step 4, or Step 4 cannot connect.'
+                        break
+                    }
+                    Start-Process -FilePath $configurator -Wait
+                }
             }
         } else {
             Write-Warn 'Run "MySQL Configurator" from the Start menu to create the server instance.'
