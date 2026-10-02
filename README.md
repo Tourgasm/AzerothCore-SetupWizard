@@ -21,7 +21,7 @@ The wizard handles the installs, downloads, build, database and networking. It f
 > This is a community tool and is not affiliated with the AzerothCore or TrinityCore projects.
 > If something doesn't work, open an issue here instead of asking their teams.
 
-> **Pre-release:** AzerothCore and TrinityCore have both been tested end to end on a PC with WAMP. Setups without WAMP (where the wizard installs MySQL itself) follow the official guides but haven't been fully tested yet. If you try that, please report how it went (and attach `setup-log.txt`).
+> **Pre-release:** AzerothCore and TrinityCore have both been tested end to end on a PC with WAMP. On a clean PC without WAMP, Step 1 (installing all the tools, MySQL and Boost) has been tested; the remaining steps haven't had a complete run there yet. If you try that, please report how it went (and attach `setup-log.txt`).
 
 ## Features
 

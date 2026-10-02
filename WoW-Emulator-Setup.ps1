@@ -574,15 +574,24 @@ function Get-VisualStudio {
     }
     if (-not $path) { return $null }
     $path = "$path".Trim()
-    # isComplete is 0 when the installer was interrupted or a package failed.
-    $complete = & $vswhere -all -products * -path $path -property isComplete
+    # isComplete is 0 when the installer was interrupted or a package failed. vswhere lists
+    # instances in the same order for every property, so match this one up by its path.
+    $allPaths = @(& $vswhere -all -products * -property installationPath)
+    $allFlags = @(& $vswhere -all -products * -property isComplete)
+    $i = [array]::IndexOf(@($allPaths | ForEach-Object { "$_".Trim() }), $path)
+    $complete = ($i -lt 0 -or $i -ge $allFlags.Count -or "$($allFlags[$i])".Trim() -ne '0')
+    # The Windows SDK is one of the last packages installed; without its headers,
+    # libraries and resource compiler nothing compiles.
+    $kits = "${env:ProgramFiles(x86)}\Windows Kits\10"
+    $hasSdk = [bool](Get-ChildItem "$kits\Include\*\um\Windows.h" -ErrorAction SilentlyContinue) -and
+              [bool](Get-ChildItem "$kits\Lib\*\um\x64\kernel32.Lib" -ErrorAction SilentlyContinue) -and
+              [bool](Get-ChildItem "$kits\bin\*\x64\rc.exe" -ErrorAction SilentlyContinue)
     [pscustomobject]@{
         Path       = $path
         Major      = [int]("$ver".Split('.')[0])
         HasCpp     = $hasCpp
-        IsComplete = ("$complete".Trim() -ne '0')
-        # The Windows SDK is one of the last packages installed; without it nothing compiles.
-        HasSdk     = [bool](Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Include\*\um\Windows.h" -ErrorAction SilentlyContinue)
+        IsComplete = $complete
+        HasSdk     = $hasSdk
     }
 }
 

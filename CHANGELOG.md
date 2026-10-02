@@ -4,8 +4,8 @@
 
 Found by a test run on a clean PC (Windows Sandbox, no WAMP):
 
-- Confirmed working on a clean PC: winget auto-install, Git, CMake, Visual C++ runtime, OpenSSL 3 and HeidiSQL.
-- Fixed: an interrupted Visual Studio install was accepted as working. The wizard now checks that the Windows SDK is present and offers to let the Visual Studio Installer finish where it stopped.
+- Confirmed working on a clean PC: all of Step 1 (winget auto-install, Git, CMake, Visual C++ runtime, OpenSSL 3, HeidiSQL, MySQL from the ZIP archive, Boost).
+- Fixed: an interrupted Visual Studio install was accepted as working. The wizard now checks that the Windows SDK (headers, libraries and tools) is present and offers to let the Visual Studio Installer finish where it stopped.
 - Fixed: MySQL could not be installed on Windows without VBScript (Windows Sandbox, and future Windows versions as VBScript is removed). MySQL's installer needs VBScript and failed with error 2738. The wizard now installs MySQL from the official ZIP archive in that case, or whenever the installer fails: it unpacks MySQL, creates the databases, registers the `MySQL84` Windows service and asks you for a root password. No MySQL Configurator step is needed on that path.
 - When a winget install fails, the wizard now prints the reason from the installer's own log and explains Windows Installer errors 1603 and 1618 (another installation was interrupted or is still running: restart Windows and run Step 1 again).
 
