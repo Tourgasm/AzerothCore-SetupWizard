@@ -1,6 +1,6 @@
 # WoW Emulator Setup
 
-**Version 0.9.2 (pre-release)** · [Changelog](CHANGELOG.md) · [MIT License](LICENSE)
+**Version 0.9.3 (pre-release)** · [Changelog](CHANGELOG.md) · [MIT License](LICENSE)
 
 An interactive wizard that sets up your own World of Warcraft 3.3.5a (Wrath of the Lich King) private server on Windows. You choose between:
 

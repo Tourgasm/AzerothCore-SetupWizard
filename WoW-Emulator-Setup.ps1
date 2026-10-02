@@ -40,7 +40,7 @@ $ErrorActionPreference = 'Stop'
 # Shared settings
 # ---------------------------------------------------------------------------
 $WizardName       = 'WoW Emulator Setup'
-$WizardVersion    = '0.9.2'
+$WizardVersion    = '0.9.3'
 $BuildConfig      = 'RelWithDebInfo'
 $OpenSslHashesUrl = 'https://github.com/slproweb/opensslhashes/raw/master/win32_openssl_hashes.json'
 $LogFile          = Join-Path $PSScriptRoot 'setup-log.txt'
@@ -277,11 +277,32 @@ function Invoke-Winget {
     if ($Override) { $wgArgs += @('--override', $Override) } else { $wgArgs += '--silent' }
 
     Write-Step "winget install $Id $Version"
-    & winget @wgArgs | Out-Host
+    & winget @wgArgs | Tee-Object -Variable wgOut | Out-Host
     $code = $LASTEXITCODE
+    $script:LastWingetOutput = @($wgOut) -join "`n"
     Update-SessionPath
     if ($code -ne 0) { Write-Warn "winget exited with code $code for $Id" }
     return ($code -eq 0)
+}
+
+# After a failed winget install: prints the reason from the installer's own log (so it
+# ends up in setup-log.txt) and explains the common Windows Installer error codes.
+function Show-InstallerFailure([string]$Name) {
+    $out = "$script:LastWingetOutput"
+    if ($out -match 'Installer log is available at:\s*(.+\.log)') {
+        $log = $Matches[1].Trim()
+        if (Test-Path $log) {
+            $lines = @(Get-Content $log | Where-Object { $_ -match 'Error \d{4}|returned actual error code|Return value 3|-- (Installation|Error)' } | Select-Object -Last 8)
+            if ($lines.Count) {
+                Write-Host "    From the $Name installer log ($log):"
+                $lines | ForEach-Object { Write-Host "      $_" }
+            }
+        }
+    }
+    if ($out -match 'exit code:\s*(1603|1618)') {
+        Write-Warn "Windows Installer error $($Matches[1]). This usually means another installation was interrupted or is still running (for example Visual Studio)."
+        Write-Warn 'Restart Windows, then run Step 1 again. Finished parts are skipped.'
+    }
 }
 
 function Test-Winget {
@@ -550,7 +571,24 @@ function Get-VisualStudio {
         $ver  = & $vswhere -latest -products * -version $range -property installationVersion
     }
     if (-not $path) { return $null }
-    [pscustomobject]@{ Path = "$path".Trim(); Major = [int]("$ver".Split('.')[0]); HasCpp = $hasCpp }
+    $path = "$path".Trim()
+    # isComplete is 0 when the installer was interrupted or a package failed.
+    $complete = & $vswhere -all -products * -path $path -property isComplete
+    [pscustomobject]@{
+        Path       = $path
+        Major      = [int]("$ver".Split('.')[0])
+        HasCpp     = $hasCpp
+        IsComplete = ("$complete".Trim() -ne '0')
+        # The Windows SDK is one of the last packages installed; without it nothing compiles.
+        HasSdk     = [bool](Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Include\*\um\Windows.h" -ErrorAction SilentlyContinue)
+    }
+}
+
+# What stops this Visual Studio from compiling the server, or $null if it is usable.
+function Get-VisualStudioProblem($Vs) {
+    if (-not $Vs.HasCpp) { return "'Desktop development with C++' is missing" }
+    if (-not $Vs.HasSdk) { return 'the Windows SDK is missing (the Visual Studio installation did not finish)' }
+    return $null
 }
 
 function Initialize-VisualStudio {
@@ -565,17 +603,25 @@ function Initialize-VisualStudio {
         }
     }
 
-    if (-not $vs.HasCpp) {
-        Write-Warn "Visual Studio found at $($vs.Path), but 'Desktop development with C++' is missing."
-        if (Read-YesNo 'Add the C++ workload now?') {
+    # A missing C++ workload and an interrupted install are fixed the same way: "modify"
+    # adds the workload and resumes whatever packages did not finish.
+    $problem = Get-VisualStudioProblem $vs
+    if ($problem) {
+        Write-Warn "Visual Studio found at $($vs.Path), but $problem."
+        if (Read-YesNo 'Let the Visual Studio Installer finish the C++ installation now? (it continues where it stopped)') {
             $setup = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
             Start-Process -FilePath $setup -Wait -ArgumentList @(
                 'modify', '--installPath', "`"$($vs.Path)`"",
                 '--add', 'Microsoft.VisualStudio.Workload.NativeDesktop', '--includeRecommended',
                 '--passive', '--norestart')
             $vs = Get-VisualStudio
+            $problem = Get-VisualStudioProblem $vs
         }
-        if (-not $vs.HasCpp) { throw 'The Visual Studio C++ workload is required. Add it with the Visual Studio Installer and re-run.' }
+        if ($problem) {
+            throw "Visual Studio cannot compile the server yet: $problem. Open the Visual Studio Installer, click Modify (or Resume), tick 'Desktop development with C++', let it finish, then run this step again."
+        }
+    } elseif (-not $vs.IsComplete) {
+        Write-Warn 'The Visual Studio Installer reports an unfinished or failed package. The C++ tools and Windows SDK are present, so the wizard continues; if the compile fails, open the Visual Studio Installer and choose Repair.'
     }
 
     $generator = switch ($vs.Major) {
@@ -741,7 +787,10 @@ function Get-StandaloneMySql {
         Write-Step 'Installing MySQL 8.4 LTS...'
         Install-MySqlServer
         $mysql = Find-StandaloneMySql
-        if (-not $mysql) { throw 'MySQL installation failed. Install MySQL 8.4 manually from dev.mysql.com and re-run.' }
+        if (-not $mysql) {
+            Show-InstallerFailure 'MySQL'
+            throw 'MySQL installation failed. See the messages above; if they do not help, install MySQL 8.4 manually from dev.mysql.com and re-run.'
+        }
         Write-Ok "Installed MySQL $($mysql.Version)"
     }
     if (-not $mysql.HasDevFiles) {
