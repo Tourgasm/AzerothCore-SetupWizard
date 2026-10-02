@@ -21,7 +21,7 @@ The wizard handles the installs, downloads, build, database and networking. It f
 > This is a community tool and is not affiliated with the AzerothCore or TrinityCore projects.
 > If something doesn't work, open an issue here instead of asking their teams.
 
-> **What has been tested:** all six steps have been run end to end with AzerothCore on a PC with WAMP and on a freshly installed Windows 11 without WAMP, and with TrinityCore on a PC with WAMP. TrinityCore on a PC without WAMP uses the same MySQL code but hasn't had its own complete run yet. If something goes wrong, please open an issue and attach `setup-log.txt`.
+> **What has been tested:** all six steps have been run end to end with AzerothCore on a PC with WAMP and on a freshly installed Windows 11 without WAMP, and with TrinityCore on a PC with WAMP. TrinityCore on a PC without WAMP uses the same installation code as the AzerothCore run, but hasn't had its own complete run. If something goes wrong, please open an issue and attach `setup-log.txt`.
 
 ## Features
 

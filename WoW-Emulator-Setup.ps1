@@ -760,6 +760,23 @@ function Get-MySqlLivePort($MySql) {
     return $null
 }
 
+# Returns once a MySQL server answers on the install's port. While none does, explains
+# how to start it and lets the user retry, enter a different port, or stop.
+function Wait-MySqlReachable($MySql) {
+    while (-not (Test-MySqlProtocolPort $MySql.Port)) {
+        Update-MySqlPort $MySql
+        if (Test-MySqlProtocolPort $MySql.Port) { break }
+        Write-Fail "No MySQL server is answering on port $($MySql.Port). It is probably not running."
+        $startHint = if ($MySql.Source -eq 'WAMP') { 'start WAMP and wait for the green tray icon' } else { 'start the MySQL service (Task Manager > Services)' }
+        Write-Host "    To fix: $startHint, then press Enter to try again."
+        Write-Host '    If your MySQL uses a different port, type the port number instead.'
+        $answer = "$(Read-Host 'Press Enter to retry, type a port number, or Q to stop')".Trim()
+        if ($answer -match '^[Qq]$') { Stop-Wizard 'MySQL is not reachable. Start it and run this step again.' }
+        $n = 0
+        if ([int]::TryParse($answer, [ref]$n) -and $n -gt 0 -and $n -lt 65536) { $MySql.Port = $n }
+    }
+}
+
 # Switches to the live port when it differs from what my.ini said.
 function Update-MySqlPort($MySql) {
     $live = Get-MySqlLivePort $MySql
@@ -1791,18 +1808,7 @@ function Step-Database {
     $rootPass = $null
     for ($try = 1; $try -le 3; $try++) {
         # Nothing answering on the port is not a password problem: sort that out first.
-        while (-not (Test-MySqlProtocolPort $mysql.Port)) {
-            Update-MySqlPort $mysql
-            if (Test-MySqlProtocolPort $mysql.Port) { break }
-            Write-Fail "No MySQL server is answering on port $($mysql.Port). It is probably not running."
-            $startHint = if ($mysql.Source -eq 'WAMP') { 'start WAMP and wait for the green tray icon' } else { 'start the MySQL service (Task Manager > Services)' }
-            Write-Host "    To fix: $startHint, then press Enter to try again."
-            Write-Host '    If your MySQL uses a different port, type the port number instead.'
-            $answer = "$(Read-Host 'Press Enter to retry, type a port number, or Q to stop')".Trim()
-            if ($answer -match '^[Qq]$') { Stop-Wizard 'MySQL is not reachable. Start it and run Step 4 again.' }
-            $n = 0
-            if ([int]::TryParse($answer, [ref]$n) -and $n -gt 0 -and $n -lt 65536) { $mysql.Port = $n }
-        }
+        Wait-MySqlReachable $mysql
         $rootPass = Read-Secret "MySQL root password$rootHint"
         $r = Invoke-MySql -User 'root' -Password $rootPass -Sql 'SELECT VERSION();'
         if ($r.Ok) { Write-Ok "Logged in to MySQL $($r.Output) as root (port $($mysql.Port))"; break }
@@ -1969,7 +1975,9 @@ function Set-ClientRealmlist([string]$Address) {
 function Step-Networking {
     Write-Header 'Step 5/6: Networking'
     $paths = Resolve-Paths
-    Resolve-MySql | Out-Null
+    $mysql = Resolve-MySql
+    # Without this, a stopped MySQL looks like "the realmlist table does not exist yet".
+    Wait-MySqlReachable $mysql
     $account = Get-DbAccount $paths
 
     $mode = Read-Choice 'Who will connect to this server?' @(
