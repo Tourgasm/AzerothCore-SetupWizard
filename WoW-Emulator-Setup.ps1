@@ -270,6 +270,40 @@ function Add-ToMachinePath([string]$Dir) {
     Write-Ok "Added to system PATH: $Dir"
 }
 
+# True for the lines winget emits while animating: spinner frames (- \ | /), progress
+# bars made of block characters, and bare "x MB / y MB" or "nn%" counters. The last
+# alternative catches the bar when it was decoded with the wrong code page anyway.
+function Test-WingetProgressLine([string]$Line) {
+    return ($Line -match '^\s*[-\\|/]\s*$' -or
+            $Line -match '[█▒░]' -or
+            $Line -match '^\s*\d+(\.\d+)?\s*(B|KB|MB|GB)\s*/\s*\d' -or
+            $Line -match '^\s*\d{1,3}\s*%\s*$' -or
+            $Line -match 'Γû')
+}
+
+# Shows one line of winget output. Progress updates overwrite a single console line and
+# are kept out of the logs (each update would otherwise be its own line); everything
+# else is printed normally and collected in $Collected. Call with $null when winget is
+# done to clear a progress line that is still showing.
+function Write-WingetLine([string]$Line, $Collected) {
+    $width = 79
+    try { $width = [math]::Max(20, [Console]::WindowWidth - 1) } catch { }
+    if ($null -ne $Line -and (Test-WingetProgressLine $Line)) {
+        if ($Line -match '^\s*[-\\|/]\s*$') { return }   # spinner frames carry no information
+        $text = $Line.Trim()
+        if ($text.Length -gt $width) { $text = $text.Substring(0, $width) }
+        try { [Console]::Write("`r" + $text.PadRight($width)); $script:WingetProgressShown = $true } catch { }
+        return
+    }
+    if ($script:WingetProgressShown) {
+        try { [Console]::Write("`r" + (' ' * $width) + "`r") } catch { }
+        $script:WingetProgressShown = $false
+    }
+    if ($null -eq $Line -or $Line.Trim() -eq '') { return }
+    $Collected.Add($Line)
+    Write-Host $Line
+}
+
 function Invoke-Winget {
     param([string]$Id, [string]$Version, [string]$Override)
     $wgArgs = @('install', '--id', $Id, '-e', '--source', 'winget',
@@ -278,9 +312,19 @@ function Invoke-Winget {
     if ($Override) { $wgArgs += @('--override', $Override) } else { $wgArgs += '--silent' }
 
     Write-Step "winget install $Id $Version"
-    & winget @wgArgs | Tee-Object -Variable wgOut | Out-Host
-    $code = $LASTEXITCODE
-    $script:LastWingetOutput = @($wgOut) -join "`n"
+    # winget writes UTF-8. Read with the console's default code page, its progress bar
+    # shows up as garbage, so switch to UTF-8 for the duration of the call.
+    $oldEncoding = [Console]::OutputEncoding
+    try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }
+    $wgOut = New-Object System.Collections.Generic.List[string]
+    try {
+        & winget @wgArgs | ForEach-Object { Write-WingetLine "$_" $wgOut }
+        $code = $LASTEXITCODE
+    } finally {
+        Write-WingetLine $null $wgOut
+        try { [Console]::OutputEncoding = $oldEncoding } catch { }
+    }
+    $script:LastWingetOutput = $wgOut -join "`n"
     Update-SessionPath
     if ($code -ne 0) { Write-Warn "winget exited with code $code for $Id" }
     return ($code -eq 0)

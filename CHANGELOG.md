@@ -10,6 +10,7 @@ Found by a test run on a clean PC (Windows Sandbox, no WAMP):
 - Fixed: on PCs with little memory for their processor count (for example 8 GB with 6 cores), the compile failed with "C1060: compiler is out of heap space". The wizard now limits how many compiler processes run at once on such PCs and says so. PCs with 2.5 GB or more per logical processor compile at full speed as before.
 - If the compiler still runs out of memory, the wizard now continues automatically with fewer compiler processes (down to one at a time) instead of stopping. Files that already compiled are kept.
 - MySQL's port is now detected from the running server instead of only being read from `my.ini`, so a non-standard port is picked up without the user having to know it. If no MySQL answers at all in Step 4, the wizard explains how to start it and lets you retry or enter a port.
+- Fixed: winget's download progress bar showed up as rows of garbled characters (it looked like a corrupted font). It now displays as one line that updates in place, and is kept out of the log.
 - Compiler output is now also saved to `build-log.txt`, line by line, so it survives a crash or a closed window (the main log is written in batches and could lose it). When the compile fails, the first compiler errors are shown.
 - When a winget install fails, the wizard now prints the reason from the installer's own log and explains Windows Installer errors 1603 and 1618 (another installation was interrupted or is still running: restart Windows and run Step 1 again).
 
