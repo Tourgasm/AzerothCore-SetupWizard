@@ -299,7 +299,9 @@ function Show-InstallerFailure([string]$Name) {
             }
         }
     }
-    if ($out -match 'exit code:\s*(1603|1618)') {
+    if ($lines -match 'Error 2738') {
+        Write-Warn "The $Name installer needs VBScript, which this Windows does not have."
+    } elseif ($out -match 'exit code:\s*(1603|1618)') {
         Write-Warn "Windows Installer error $($Matches[1]). This usually means another installation was interrupted or is still running (for example Visual Studio)."
         Write-Warn 'Restart Windows, then run Step 1 again. Finished parts are skipped.'
     }
@@ -766,8 +768,8 @@ function Find-StandaloneMySql {
            Sort-Object Version -Descending | Select-Object -First 1
 }
 
-function Install-MySqlServer {
-    # Only the 8.4 LTS line; winget's "latest" may be an unsupported 9.x / 26.x release.
+# Newest 8.4 LTS version winget knows; winget's "latest" may be an unsupported 9.x / 26.x release.
+function Get-MySqlLtsVersion {
     $versions = (& winget show --id Oracle.MySQL -e --versions --accept-source-agreements) | Out-String
     $lts = [regex]::Matches($versions, '(?m)^\s*(8\.4\.\d+)\s*$') |
            ForEach-Object { [version]$_.Groups[1].Value } |
@@ -776,7 +778,95 @@ function Install-MySqlServer {
         Start-Process 'https://dev.mysql.com/downloads/mysql/8.4.html'
         Stop-Wizard 'winget has no MySQL 8.4 package. Install MySQL 8.4 from the page that just opened, then re-run.'
     }
-    Invoke-Winget -Id 'Oracle.MySQL' -Version $lts.ToString() | Out-Null
+    return $lts.ToString()
+}
+
+# MySQL's MSI installer runs VBScript custom actions (it fails with error 2738 without
+# it). VBScript is missing in Windows Sandbox and is being removed from Windows.
+function Test-VBScript { return (Test-Path (Join-Path $env:WINDIR 'System32\vbscript.dll')) }
+
+# Writes my.ini and creates the system databases (root starts with an empty password).
+function Initialize-MySqlData([string]$Root, [string]$DataRoot, [int]$Port) {
+    New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
+    $ini = Join-Path $DataRoot 'my.ini'
+    $lines = @('[mysqld]',
+               "basedir=`"$($Root -replace '\\', '/')`"",
+               "datadir=`"$((Join-Path $DataRoot 'Data') -replace '\\', '/')`"",
+               "port=$Port", '', '[client]', "port=$Port")
+    [IO.File]::WriteAllText($ini, ($lines -join "`r`n") + "`r`n", (New-Object Text.UTF8Encoding $false))
+    & (Join-Path $Root 'bin\mysqld.exe') "--defaults-file=$ini" --initialize-insecure --console | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'MySQL could not create its data folder (mysqld --initialize failed). See the messages above.' }
+    return $ini
+}
+
+# Installs MySQL without its installer: unpack the official ZIP into Program Files, create
+# the data folder, register and start the Windows service, then set the root password.
+# Ends up in the same folders the MSI uses, so the rest of the wizard treats it the same.
+function Install-MySqlFromZip([string]$Version) {
+    $name = 'MySQL Server 8.4'
+    $base = Join-Path $env:ProgramFiles 'MySQL'
+    $root = Join-Path $base $name
+    $dataRoot = Join-Path $env:ProgramData "MySQL\$name"
+    $service = 'MySQL84'
+
+    $zip = Join-Path $env:TEMP "mysql-$Version-winx64.zip"
+    Write-Step "Downloading MySQL $Version (ZIP archive, about 280 MB)..."
+    Save-Download "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-$Version-winx64.zip" $zip
+
+    Write-Step "Unpacking into $root..."
+    New-Item -ItemType Directory -Force -Path $base | Out-Null
+    & tar.exe -xf $zip -C $base
+    if ($LASTEXITCODE -ne 0) { Expand-Archive -Path $zip -DestinationPath $base -Force }
+    $unpacked = Join-Path $base "mysql-$Version-winx64"
+    if (-not (Test-Path (Join-Path $unpacked 'bin\mysqld.exe'))) { throw "Unpacking MySQL failed: $unpacked\bin\mysqld.exe not found." }
+    # Leftovers of a failed installer run (Find-StandaloneMySql found nothing usable there).
+    if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+    Rename-Item $unpacked $name
+    Remove-Item $zip -Force -ErrorAction SilentlyContinue
+
+    # WAMP (or another MySQL) may already be listening on 3306.
+    $port = 3306
+    if (Get-NetTCPConnection -LocalPort 3306 -State Listen -ErrorAction SilentlyContinue) {
+        $port = 3307
+        Write-Warn 'Port 3306 is already in use, so this MySQL will use port 3307.'
+    }
+
+    # Databases from an earlier MySQL 8.4 install are kept, along with their root password.
+    $existingData = Test-Path (Join-Path $dataRoot 'Data\mysql')
+    if ($existingData) {
+        Write-Warn "Existing MySQL databases found in $dataRoot. Keeping them; the root password is whatever it was before."
+        $ini = Join-Path $dataRoot 'my.ini'
+    } else {
+        Write-Step 'Creating the MySQL data folder (this takes a minute)...'
+        $ini = Initialize-MySqlData $root $dataRoot $port
+    }
+
+    Write-Step "Registering and starting the Windows service '$service'..."
+    & (Join-Path $root 'bin\mysqld.exe') --install $service "--defaults-file=$ini" | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Could not register the MySQL service '$service'." }
+    Start-Service $service
+    if ($existingData) { return }
+
+    # Give root a password right away; it starts out empty.
+    $script:MySql = Get-MySqlInstall $root
+    Write-Host ''
+    Write-Host 'MySQL is running. Its administrator account is called "root".'
+    Write-Host 'Choose a root password and WRITE IT DOWN: Step 4 asks for it.'
+    while ($true) {
+        $pw = Read-Secret 'New MySQL root password (press Enter to leave it empty, not recommended)'
+        if ($pw -eq '') { Write-Warn 'Root password left empty.'; break }
+        if ((Read-Secret 'Type it again') -ne $pw) { Write-Warn 'Passwords did not match.'; continue }
+        $r = $null
+        foreach ($try in 1..6) {   # the server may need a few seconds after the service starts
+            $r = Invoke-MySql -User 'root' -Password '' -Sql "ALTER USER 'root'@'localhost' IDENTIFIED BY $(ConvertTo-SqlString $pw);"
+            if ($r.Ok) { break }
+            Start-Sleep -Seconds 3
+        }
+        if (-not $r.Ok) { throw "Could not set the root password: $($r.Output)" }
+        Write-Ok 'Root password set'
+        break
+    }
+    $script:MySql = $null
 }
 
 function Get-StandaloneMySql {
@@ -785,12 +875,22 @@ function Get-StandaloneMySql {
         Write-Ok "Found MySQL $($mysql.Version) at $($mysql.Root)"
     } else {
         Write-Step 'Installing MySQL 8.4 LTS...'
-        Install-MySqlServer
-        $mysql = Find-StandaloneMySql
-        if (-not $mysql) {
-            Show-InstallerFailure 'MySQL'
-            throw 'MySQL installation failed. See the messages above; if they do not help, install MySQL 8.4 manually from dev.mysql.com and re-run.'
+        $version = Get-MySqlLtsVersion
+        if (Test-VBScript) {
+            Invoke-Winget -Id 'Oracle.MySQL' -Version $version | Out-Null
+            $mysql = Find-StandaloneMySql
+            if (-not $mysql) {
+                Show-InstallerFailure 'MySQL'
+                Write-Warn "MySQL's installer did not work. Installing from the ZIP archive instead..."
+            }
+        } else {
+            Write-Warn "This Windows has no VBScript, which MySQL's installer needs. Installing from the ZIP archive instead..."
         }
+        if (-not $mysql) {
+            Install-MySqlFromZip $version
+            $mysql = Find-StandaloneMySql
+        }
+        if (-not $mysql) { throw 'MySQL installation failed. Install MySQL 8.4 manually from dev.mysql.com and re-run.' }
         Write-Ok "Installed MySQL $($mysql.Version)"
     }
     if (-not $mysql.HasDevFiles) {

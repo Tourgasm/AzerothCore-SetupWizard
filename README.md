@@ -90,6 +90,12 @@ Once the first test start works, Step 6 copies the finished server into **`C:\Az
 
 **MySQL / WAMP.** If you use WAMP, answer **yes**. WAMP must be running (green tray icon) during Step 4, and its MySQL version must be 8.x (TrinityCore needs 8.0.34 or newer). WAMP's default root password is empty, so just press Enter. MariaDB is not supported by this wizard.
 
+Without WAMP, the wizard installs MySQL 8.4 LTS for you:
+- Normally it uses MySQL's installer and then opens **MySQL Configurator**, where you set a root password and keep "Configure as Windows Service" ticked.
+- If that installer can't run (it needs VBScript, which some Windows installs no longer have), the wizard sets MySQL up itself from the official ZIP archive and just asks you for a root password.
+
+Either way, **write the root password down**. Step 4 asks for it.
+
 **Boost.** The wizard can download and install the right Boost for you (about 200 MB, installed to `C:\local`):
 - AzerothCore: [Boost 1.78](https://sourceforge.net/projects/boost/files/boost-binaries/1.78.0/boost_1_78_0-msvc-14.3-64.exe/download)
 - TrinityCore: the **latest stable** Boost, as TrinityCore's guide recommends (1.80 is the minimum). The wizard looks up the newest version from [archives.boost.io](https://archives.boost.io/release/) when it runs. It also offers Boost 1.84, the version TrinityCore's own Windows build is tested with, in case the newest one causes build problems.
