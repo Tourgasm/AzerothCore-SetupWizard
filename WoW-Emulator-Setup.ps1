@@ -1241,8 +1241,33 @@ function Invoke-CMakeConfigure($Paths, $Generator, $BoostRoot, $MySql, [bool]$Bu
     Write-Ok 'CMake configuration complete'
 }
 
+# How many compiler processes to run at once. The build runs several projects in parallel
+# (MSBuild /m) and several compiler processes per project (/MP), and the big projects need
+# well over 1 GB per process. With too little memory the compiler fails with
+# "C1060: compiler is out of heap space". PCs with 2 GB or more per logical processor
+# build at full speed; smaller ones get a limit that fits their memory.
+function Get-BuildParallelism([double]$RamGb = 0, [int]$Cores = 0) {
+    if ($RamGb -le 0) { $RamGb = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB }
+    if ($Cores -le 0) { $Cores = [Environment]::ProcessorCount }
+    if ($RamGb -ge 2 * $Cores) {
+        return [pscustomobject]@{ Limited = $false; Args = @('--parallel'); Note = '' }
+    }
+    # Keep about 2.5 GB for Windows and allow about 1.75 GB per compiler process.
+    $budget = [math]::Max(1, [math]::Floor(($RamGb - 2.5) / 1.75))
+    if ($budget -ge 6) { $projects = 2; $perProject = [math]::Min($Cores, [math]::Floor($budget / 2)) }
+    else               { $projects = 1; $perProject = [math]::Min($Cores, $budget) }
+    return [pscustomobject]@{
+        Limited = $true
+        Args    = @('--parallel', "$projects", '--', "/p:CL_MPCount=$perProject")
+        Note    = "This PC has $([math]::Round($RamGb)) GB of memory for $Cores processors, so the compile is limited to $($projects * $perProject) compiler processes at a time to avoid running out of memory. It will take longer."
+    }
+}
+
 function Invoke-Build($Paths) {
     Write-Step "Compiling ALL_BUILD ($BuildConfig, x64). This usually takes 15-60 minutes..."
+    $parallel = Get-BuildParallelism
+    if ($parallel.Limited) { Write-Warn $parallel.Note }
+    $buildArgs = $parallel.Args
     Write-Host "    Compiler output is also saved line by line to $BuildLogFile"
 
     # setup-log.txt (a PowerShell transcript) is written in batches, so a crash or a
@@ -1253,7 +1278,7 @@ function Invoke-Build($Paths) {
     $errors = New-Object System.Collections.Generic.List[string]
     try {
         $writer.WriteLine("===== $WizardName v$WizardVersion - $($script:Core.Name) build started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') =====")
-        & $script:CMake --build $Paths.Build --config $BuildConfig --parallel | ForEach-Object {
+        & $script:CMake --build $Paths.Build --config $BuildConfig @buildArgs | ForEach-Object {
             $writer.WriteLine("$_")
             if ($errors.Count -lt 5 -and "$_" -match '(: (fatal )?error |error MSB\d+)') { $errors.Add("$_".Trim()) }
             $_
@@ -1268,6 +1293,9 @@ function Invoke-Build($Paths) {
         if ($errors.Count) {
             Write-Fail 'First errors from the compiler:'
             $errors | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        }
+        if ($errors -match 'C1060|C1076|LNK1102|D8027|D8040') {
+            Write-Warn 'The compiler ran out of memory. Close other programs and run Step 2 again: it continues where it stopped, so each attempt gets further.'
         }
         throw "Compilation failed. The full compiler output is in $BuildLogFile."
     }

@@ -149,6 +149,7 @@ The logs are `setup-log.txt` (everything the wizard did) and `build-log.txt` (th
 - **Getting help.** Open an issue and attach `setup-log.txt`. Its first lines show the wizard version you ran. If the compile failed or the wizard closed during it, attach `build-log.txt` too.
 - **Running both cores.** AzerothCore and TrinityCore can be installed side by side, but they use the same ports, so only one can run at a time. If the other one is running, the wizard offers to stop it.
 - **CMake can't find Boost.** Re-run Step 1 and pick your Boost folder again. It must contain a `boost` folder and a `lib64-msvc-14.x` folder.
+- **Compile fails with "compiler is out of heap space" (C1060).** The PC ran out of memory. The wizard already limits the compile on PCs with little memory, but other open programs count too. Close them and run Step 2 again; it continues where it stopped.
 - **worldserver closes right away.** Usually the client data is missing (re-run Step 3) or MySQL isn't running.
 - **Friends can't connect.** Check the realm address in Step 5, your router's port forwarding, and that both servers are running.
 - **Starting over.** Delete that core's `wizard-settings*.json` and the wizard asks everything again.
