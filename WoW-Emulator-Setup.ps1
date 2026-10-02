@@ -1921,6 +1921,16 @@ function Start-Servers($Paths, $Account) {
 # ===========================================================================
 # STEP 5: Networking
 # ===========================================================================
+# An IPv4 address (each part 0-255), "localhost", or a host name with at least one dot.
+function Test-RealmAddress([string]$Address) {
+    $a = "$Address".Trim()
+    if ($a -eq 'localhost') { return $true }
+    if ($a -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$') {
+        return (@($Matches[1], $Matches[2], $Matches[3], $Matches[4]) | Where-Object { [int]$_ -gt 255 }).Count -eq 0
+    }
+    return ($a -match '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$' -and $a -notmatch '^[\d.]+$')
+}
+
 function Get-LanAddresses {
     return @(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } |
              ForEach-Object { $_.IPv4Address } | ForEach-Object { $_.IPAddress } |
@@ -1969,7 +1979,9 @@ function Step-Networking {
 
     $address = '127.0.0.1'
     if ($mode -eq 1) {
-        $lan = Get-LanAddresses
+        # @() matters: a single address comes back as a bare string, and indexing a
+        # string with [0] returns its first character ("1"), not the address.
+        $lan = @(Get-LanAddresses)
         if ($lan.Count -eq 0) { $address = Read-Text 'LAN IP address of this computer' '192.168.1.2' }
         elseif ($lan.Count -eq 1) { $address = $lan[0] }
         else { $address = $lan[(Read-Choice 'Which network address should players use?' $lan)] }
@@ -1983,6 +1995,11 @@ function Step-Networking {
         } else {
             $address = Read-Text 'Domain name' 'mydomain.com'
         }
+    }
+    # Never write something to realmlist that the authserver cannot resolve: it refuses to start.
+    while (-not (Test-RealmAddress $address)) {
+        Write-Warn "'$address' is not a valid IP address or host name."
+        $address = Read-Text 'Address players should connect to (for example 192.168.1.20 or mydomain.com)' '127.0.0.1'
     }
     Write-Ok "Realm address: $address"
 
@@ -2002,7 +2019,12 @@ function Step-Networking {
     $r = Invoke-MySql -User $account.User -Password $account.Password -Database $authDb `
         -Sql "UPDATE realmlist SET address = $(ConvertTo-SqlString $address) WHERE id = 1;"
     if (-not $r.Ok) { throw "Updating realmlist failed: $($r.Output)" }
-    Write-Ok "realmlist.address = $address"
+    # Read it back: show what is really stored rather than what we meant to store.
+    $stored = Invoke-MySql -User $account.User -Password $account.Password -Database $authDb -Sql 'SELECT address FROM realmlist WHERE id = 1;'
+    if (-not $stored.Ok -or $stored.Output -ne $address) {
+        throw "realmlist holds '$($stored.Output)' instead of '$address'. Check the realmlist table in the $authDb database (is there a realm with id 1?)."
+    }
+    Write-Ok "realmlist.address = $($stored.Output)"
 
     # The authserver reads the realm list at startup, so restart it to apply the change.
     $running = Get-ServerProcess $paths 'authserver'
@@ -2010,6 +2032,9 @@ function Step-Networking {
         $running | Stop-Process -Force
         Start-Sleep -Seconds 2
         Start-ServerProcess $paths 'authserver'
+        Start-Sleep -Seconds 6
+        if (Get-ServerProcess $paths 'authserver') { Write-Ok 'authserver is running with the new address' }
+        else { Write-Fail 'The authserver closed right after starting. Start authserver.exe yourself to see its error message.' }
     }
 
     # --- Firewall ---
