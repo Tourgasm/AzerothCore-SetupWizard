@@ -682,6 +682,49 @@ function Get-MySqlPort([string]$IniPath) {
     return 3306
 }
 
+# True if something speaking the classic MySQL protocol answers on this local port.
+# The server greets first with a packet whose 5th byte is protocol version 10; the
+# X Protocol port (33060) that mysqld also opens does not, so this tells them apart.
+function Test-MySqlProtocolPort([int]$Port) {
+    $client = New-Object Net.Sockets.TcpClient
+    try {
+        if (-not $client.ConnectAsync('127.0.0.1', $Port).Wait(2000)) { return $false }
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = 2000
+        $buffer = New-Object byte[] 16
+        $read = $stream.Read($buffer, 0, 16)
+        return ($read -ge 5 -and $buffer[4] -eq 10)
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
+# The port this MySQL install is really listening on right now, taken from its running
+# mysqld.exe rather than from my.ini (which can be out of date, or not the file the
+# server was started with). $null if this MySQL is not running.
+function Get-MySqlLivePort($MySql) {
+    $exe = Join-Path $MySql.Bin 'mysqld.exe'
+    $procs = @(Get-Process -Name 'mysqld' -ErrorAction SilentlyContinue |
+               Where-Object { $_.Path -and $_.Path -ieq $exe })
+    if ($procs.Count -eq 0) { return $null }
+    $ports = @(Get-NetTCPConnection -State Listen -OwningProcess $procs.Id -ErrorAction SilentlyContinue |
+               ForEach-Object { [int]$_.LocalPort } | Sort-Object -Unique)
+    if ($ports -contains $MySql.Port -and (Test-MySqlProtocolPort $MySql.Port)) { return $MySql.Port }
+    foreach ($p in $ports) { if (Test-MySqlProtocolPort $p) { return $p } }
+    return $null
+}
+
+# Switches to the live port when it differs from what my.ini said.
+function Update-MySqlPort($MySql) {
+    $live = Get-MySqlLivePort $MySql
+    if ($live -and $live -ne $MySql.Port) {
+        Write-Warn "MySQL's my.ini says port $($MySql.Port), but the running server is listening on port $live. Using $live."
+        $MySql.Port = $live
+    }
+}
+
 function Get-MySqlInstall([string]$Root) {
     $bin = Join-Path $Root 'bin'
     if (-not (Test-Path $bin)) { return $null }
@@ -950,12 +993,14 @@ function Initialize-MySql {
 
 # Uses the saved MySQL choice if it is still valid, otherwise asks.
 function Resolve-MySql {
-    if ($script:MySql) { return $script:MySql }
+    # Re-check the live port on every use: MySQL may have been (re)started since last time.
+    if ($script:MySql) { Update-MySqlPort $script:MySql; return $script:MySql }
     $saved = $script:Settings.MySqlRoot
     $mysql = $null
     if ($saved -and (Test-Path $saved)) {
         $mysql = Get-MySqlInstall $saved
         if ($mysql -and (Test-MySqlVersionOk $mysql.Version)) {
+            Update-MySqlPort $mysql
             Write-Ok "Using $($mysql.Source) MySQL $($mysql.Version) on port $($mysql.Port)"
         } else { $mysql = $null }
     }
@@ -965,6 +1010,7 @@ function Resolve-MySql {
     }
     # The wiki asks for MySQL's bin folder on the system PATH.
     Add-ToMachinePath $mysql.Bin
+    Update-MySqlPort $mysql
     $script:MySql = $mysql
     return $mysql
 }
@@ -1658,9 +1704,22 @@ function Step-Database {
     $rootHint = if ($mysql.Source -eq 'WAMP') { ' (WAMP default: empty, just press Enter)' } else { '' }
     $rootPass = $null
     for ($try = 1; $try -le 3; $try++) {
+        # Nothing answering on the port is not a password problem: sort that out first.
+        while (-not (Test-MySqlProtocolPort $mysql.Port)) {
+            Update-MySqlPort $mysql
+            if (Test-MySqlProtocolPort $mysql.Port) { break }
+            Write-Fail "No MySQL server is answering on port $($mysql.Port). It is probably not running."
+            $startHint = if ($mysql.Source -eq 'WAMP') { 'start WAMP and wait for the green tray icon' } else { 'start the MySQL service (Task Manager > Services)' }
+            Write-Host "    To fix: $startHint, then press Enter to try again."
+            Write-Host '    If your MySQL uses a different port, type the port number instead.'
+            $answer = "$(Read-Host 'Press Enter to retry, type a port number, or Q to stop')".Trim()
+            if ($answer -match '^[Qq]$') { Stop-Wizard 'MySQL is not reachable. Start it and run Step 4 again.' }
+            $n = 0
+            if ([int]::TryParse($answer, [ref]$n) -and $n -gt 0 -and $n -lt 65536) { $mysql.Port = $n }
+        }
         $rootPass = Read-Secret "MySQL root password$rootHint"
         $r = Invoke-MySql -User 'root' -Password $rootPass -Sql 'SELECT VERSION();'
-        if ($r.Ok) { Write-Ok "Logged in to MySQL $($r.Output) as root"; break }
+        if ($r.Ok) { Write-Ok "Logged in to MySQL $($r.Output) as root (port $($mysql.Port))"; break }
         Write-Fail $r.Output
         $rootPass = $null
     }

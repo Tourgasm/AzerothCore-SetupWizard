@@ -96,6 +96,8 @@ Without WAMP, the wizard installs MySQL 8.4 LTS for you:
 
 Either way, **write the root password down**. Step 4 asks for it.
 
+You don't need to know which port your MySQL uses. The wizard reads it from the running MySQL server and writes it into the server's config files. If MySQL isn't running when Step 4 starts, the wizard tells you how to start it and waits.
+
 **Boost.** The wizard can download and install the right Boost for you (about 200 MB, installed to `C:\local`):
 - AzerothCore: [Boost 1.78](https://sourceforge.net/projects/boost/files/boost-binaries/1.78.0/boost_1_78_0-msvc-14.3-64.exe/download)
 - TrinityCore: the **latest stable** Boost, as TrinityCore's guide recommends (1.80 is the minimum). The wizard looks up the newest version from [archives.boost.io](https://archives.boost.io/release/) when it runs. It also offers Boost 1.84, the version TrinityCore's own Windows build is tested with, in case the newest one causes build problems.
