@@ -1,6 +1,7 @@
 # Created per machine by the wizard
 wizard-settings*.json
 setup-log.txt
+build-log.txt
 
 # Local test config (contains a path on this PC)
 *.wsb

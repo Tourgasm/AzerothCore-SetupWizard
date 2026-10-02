@@ -44,6 +44,7 @@ $WizardVersion    = '0.9.3'
 $BuildConfig      = 'RelWithDebInfo'
 $OpenSslHashesUrl = 'https://github.com/slproweb/opensslhashes/raw/master/win32_openssl_hashes.json'
 $LogFile          = Join-Path $PSScriptRoot 'setup-log.txt'
+$BuildLogFile     = Join-Path $PSScriptRoot 'build-log.txt'
 
 # ---------------------------------------------------------------------------
 # Server cores. Minimum versions come from each project's Windows requirements page.
@@ -1242,8 +1243,34 @@ function Invoke-CMakeConfigure($Paths, $Generator, $BoostRoot, $MySql, [bool]$Bu
 
 function Invoke-Build($Paths) {
     Write-Step "Compiling ALL_BUILD ($BuildConfig, x64). This usually takes 15-60 minutes..."
-    & $script:CMake --build $Paths.Build --config $BuildConfig --parallel | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw 'Compilation failed. Scroll up (or check setup-log.txt) for the first "error".' }
+    Write-Host "    Compiler output is also saved line by line to $BuildLogFile"
+
+    # setup-log.txt (a PowerShell transcript) is written in batches, so a crash or a
+    # closed window loses the most recent output. The compile is the longest step and
+    # the likeliest to be interrupted, so its output goes to its own file, flushed per line.
+    $writer = New-Object IO.StreamWriter($BuildLogFile, $true)
+    $writer.AutoFlush = $true
+    $errors = New-Object System.Collections.Generic.List[string]
+    try {
+        $writer.WriteLine("===== $WizardName v$WizardVersion - $($script:Core.Name) build started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') =====")
+        & $script:CMake --build $Paths.Build --config $BuildConfig --parallel | ForEach-Object {
+            $writer.WriteLine("$_")
+            if ($errors.Count -lt 5 -and "$_" -match '(: (fatal )?error |error MSB\d+)') { $errors.Add("$_".Trim()) }
+            $_
+        } | Out-Host
+        $code = $LASTEXITCODE
+        $writer.WriteLine("===== build finished $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') with exit code $code =====")
+    } finally {
+        $writer.Dispose()
+    }
+
+    if ($code -ne 0) {
+        if ($errors.Count) {
+            Write-Fail 'First errors from the compiler:'
+            $errors | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        }
+        throw "Compilation failed. The full compiler output is in $BuildLogFile."
+    }
     Write-Ok 'Compilation complete'
 }
 

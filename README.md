@@ -39,7 +39,7 @@ The wizard handles the installs, downloads, build, database and networking. It f
   - mod-transmog (transmogrification)
   - mod-ah-bot (fills the auction house)
 - **Networking made simple.** Choose "just me", "my home network" or "the internet", and the wizard sets the realm address and firewall rules for you.
-- **Logged.** Everything is saved to `setup-log.txt` so you can get help when something breaks.
+- **Logged.** Everything is saved to `setup-log.txt`, and the compiler output also goes to `build-log.txt`, so you can get help when something breaks.
 
 ## Requirements
 
@@ -141,12 +141,12 @@ If you'd rather do it yourself, it opens the link in your browser. If you alread
 | Databases | `acore_auth`, `acore_world`, `acore_characters` | `auth`, `world`, `characters` |
 | Your answers | `wizard-settings.json` | `wizard-settings-trinitycore.json` |
 
-The log is `setup-log.txt`, next to the script. The settings files never contain passwords.
+The logs are `setup-log.txt` (everything the wizard did) and `build-log.txt` (the compiler output, written line by line so it survives a crash), both next to the script. The settings files never contain passwords.
 
 ## Troubleshooting
 
 - **Something failed.** The error is shown in red and you go back to the menu. Fix the problem and re-run that step. Steps that are already done are skipped.
-- **Getting help.** Open an issue and attach `setup-log.txt`. Its first lines show the wizard version you ran.
+- **Getting help.** Open an issue and attach `setup-log.txt`. Its first lines show the wizard version you ran. If the compile failed or the wizard closed during it, attach `build-log.txt` too.
 - **Running both cores.** AzerothCore and TrinityCore can be installed side by side, but they use the same ports, so only one can run at a time. If the other one is running, the wizard offers to stop it.
 - **CMake can't find Boost.** Re-run Step 1 and pick your Boost folder again. It must contain a `boost` folder and a `lib64-msvc-14.x` folder.
 - **worldserver closes right away.** Usually the client data is missing (re-run Step 3) or MySQL isn't running.
