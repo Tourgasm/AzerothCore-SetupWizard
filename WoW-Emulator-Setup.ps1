@@ -1288,60 +1288,82 @@ function Invoke-CMakeConfigure($Paths, $Generator, $BoostRoot, $MySql, [bool]$Bu
 }
 
 # How many compiler processes to run at once. The build runs several projects in parallel
-# (MSBuild /m) and several compiler processes per project (/MP), and the big projects need
-# well over 1 GB per process. With too little memory the compiler fails with
-# "C1060: compiler is out of heap space". PCs with 2 GB or more per logical processor
-# build at full speed; smaller ones get a limit that fits their memory.
+# (MSBuild /m) and several compiler processes per project (/MP). The big projects, above
+# all the Playerbots module, need 2 GB or more per process; with too little memory the
+# compiler fails with "C1060: compiler is out of heap space". PCs with 2.5 GB or more per
+# logical processor build at full speed; smaller ones get a limit that fits their memory.
+# Projects = 0 means no limit.
 function Get-BuildParallelism([double]$RamGb = 0, [int]$Cores = 0) {
     if ($RamGb -le 0) { $RamGb = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB }
     if ($Cores -le 0) { $Cores = [Environment]::ProcessorCount }
-    if ($RamGb -ge 2 * $Cores) {
-        return [pscustomobject]@{ Limited = $false; Args = @('--parallel'); Note = '' }
+    if ($RamGb -ge 2.5 * $Cores) {
+        return [pscustomobject]@{ Projects = 0; PerProject = 0; Cores = $Cores; RamGb = $RamGb }
     }
-    # Keep about 2.5 GB for Windows and allow about 1.75 GB per compiler process.
-    $budget = [math]::Max(1, [math]::Floor(($RamGb - 2.5) / 1.75))
+    # Keep about 2.5 GB for Windows and allow about 2.5 GB per compiler process.
+    $budget = [math]::Max(1, [math]::Floor(($RamGb - 2.5) / 2.5))
     if ($budget -ge 6) { $projects = 2; $perProject = [math]::Min($Cores, [math]::Floor($budget / 2)) }
     else               { $projects = 1; $perProject = [math]::Min($Cores, $budget) }
-    return [pscustomobject]@{
-        Limited = $true
-        Args    = @('--parallel', "$projects", '--', "/p:CL_MPCount=$perProject")
-        Note    = "This PC has $([math]::Round($RamGb)) GB of memory for $Cores processors, so the compile is limited to $($projects * $perProject) compiler processes at a time to avoid running out of memory. It will take longer."
-    }
+    return [pscustomobject]@{ Projects = $projects; PerProject = [int]$perProject; Cores = $Cores; RamGb = $RamGb }
+}
+
+# The next, smaller setting to try after the compiler ran out of memory, or $null at 1 process.
+function Get-ReducedParallelism($P) {
+    if ($P.Projects -eq 0) { $projects = 1; $per = [math]::Max(1, [math]::Floor($P.Cores / 2)) }
+    elseif ($P.Projects -gt 1) { $projects = 1; $per = $P.PerProject }
+    elseif ($P.PerProject -gt 1) { $projects = 1; $per = [math]::Floor($P.PerProject / 2) }
+    else { return $null }
+    return [pscustomobject]@{ Projects = $projects; PerProject = [int]$per; Cores = $P.Cores; RamGb = $P.RamGb }
+}
+
+function Get-BuildArgs($P) {
+    if ($P.Projects -eq 0) { return @('--parallel') }
+    return @('--parallel', "$($P.Projects)", '--', "/p:CL_MPCount=$($P.PerProject)")
 }
 
 function Invoke-Build($Paths) {
     Write-Step "Compiling ALL_BUILD ($BuildConfig, x64). This usually takes 15-60 minutes..."
     $parallel = Get-BuildParallelism
-    if ($parallel.Limited) { Write-Warn $parallel.Note }
-    $buildArgs = $parallel.Args
+    if ($parallel.Projects -gt 0) {
+        Write-Warn "This PC has $([math]::Round($parallel.RamGb)) GB of memory for $($parallel.Cores) processors, so the compile is limited to $($parallel.Projects * $parallel.PerProject) compiler processes at a time to avoid running out of memory. It will take longer."
+    }
     Write-Host "    Compiler output is also saved line by line to $BuildLogFile"
 
-    # setup-log.txt (a PowerShell transcript) is written in batches, so a crash or a
-    # closed window loses the most recent output. The compile is the longest step and
-    # the likeliest to be interrupted, so its output goes to its own file, flushed per line.
-    $writer = New-Object IO.StreamWriter($BuildLogFile, $true)
-    $writer.AutoFlush = $true
-    $errors = New-Object System.Collections.Generic.List[string]
-    try {
-        $writer.WriteLine("===== $WizardName v$WizardVersion - $($script:Core.Name) build started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') =====")
-        & $script:CMake --build $Paths.Build --config $BuildConfig @buildArgs | ForEach-Object {
-            $writer.WriteLine("$_")
-            if ($errors.Count -lt 5 -and "$_" -match '(: (fatal )?error |error MSB\d+)') { $errors.Add("$_".Trim()) }
-            $_
-        } | Out-Host
-        $code = $LASTEXITCODE
-        $writer.WriteLine("===== build finished $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') with exit code $code =====")
-    } finally {
-        $writer.Dispose()
-    }
+    while ($true) {
+        $buildArgs = Get-BuildArgs $parallel
+        # setup-log.txt (a PowerShell transcript) is written in batches, so a crash or a
+        # closed window loses the most recent output. The compile is the longest step and
+        # the likeliest to be interrupted, so its output goes to its own file, flushed per line.
+        $writer = New-Object IO.StreamWriter($BuildLogFile, $true)
+        $writer.AutoFlush = $true
+        $errors = New-Object System.Collections.Generic.List[string]
+        $state = @{ OutOfMemory = $false }
+        try {
+            $writer.WriteLine("===== $WizardName v$WizardVersion - $($script:Core.Name) build started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') (cmake $($buildArgs -join ' ')) =====")
+            & $script:CMake --build $Paths.Build --config $BuildConfig @buildArgs | ForEach-Object {
+                $writer.WriteLine("$_")
+                if ("$_" -match 'C1060|C1076|LNK1102|OutOfMemoryException') { $state.OutOfMemory = $true }
+                if ($errors.Count -lt 5 -and "$_" -match '(: (fatal\s+)?error |error MSB\d+)') { $errors.Add("$_".Trim()) }
+                $_
+            } | Out-Host
+            $code = $LASTEXITCODE
+            $writer.WriteLine("===== build finished $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') with exit code $code =====")
+        } finally {
+            $writer.Dispose()
+        }
+        if ($code -eq 0) { break }
 
-    if ($code -ne 0) {
         if ($errors.Count) {
             Write-Fail 'First errors from the compiler:'
             $errors | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
         }
-        if ($errors -match 'C1060|C1076|LNK1102|D8027|D8040') {
-            Write-Warn 'The compiler ran out of memory. Close other programs and run Step 2 again: it continues where it stopped, so each attempt gets further.'
+        if ($state.OutOfMemory) {
+            # Compiling is incremental: finished files are kept, so a retry only does what is left.
+            $parallel = Get-ReducedParallelism $parallel
+            if ($parallel) {
+                Write-Warn "The compiler ran out of memory. Continuing automatically with $($parallel.Projects * $parallel.PerProject) compiler process(es) at a time; files already compiled are kept."
+                continue
+            }
+            Write-Warn 'The compiler ran out of memory even with one process at a time. Close other programs (or add memory / a larger page file) and run Step 2 again; it continues where it stopped.'
         }
         throw "Compilation failed. The full compiler output is in $BuildLogFile."
     }
